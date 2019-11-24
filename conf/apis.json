@@ -1,0 +1,20 @@
+{
+  "server": {
+    "diagnose": false,
+    "server_type": "unix",
+    "port": "8098",
+    "local_host": "/var/run/httpcache/sockets/proxy.sock",
+    "remote_host": "/var/run/httpcache/sockets/upstream.sock",
+    "diag_host": "/var/run/httpcache/sockets/diag.sock",
+    "instances": []
+  },
+
+  "skip_cache_apis": [
+    "skipapi/checksums"
+  ],
+
+  "local_cache_handler_apis": [
+    "/api/v2/login/"
+  ]
+
+}
