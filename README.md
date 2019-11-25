@@ -14,6 +14,17 @@ the cache and the BE
 
 ## Registering Local Handlers
 
+To register a handler with the request processing 
+```go
+if err = httpCacheCtxt.RegisterLocalCacheHandler("/something",
+  someHandler); err != nil {
+
+  log.Println(err)
+  os.Exit(-1)
+}
+```
+
+A sample handler
 ```go
 func someHandler(w http.ResponseWriter,
 	req *http.Request) (respBody []byte, err error) {
