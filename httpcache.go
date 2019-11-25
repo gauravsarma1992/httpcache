@@ -124,10 +124,6 @@ func NewHttpCacheCtxt() (httpCacheCtxt *HttpCacheCtxt, err error) {
 		return
 	}
 
-	if err = httpCacheCtxt.prepareLocalCacheBuildMap(); err != nil {
-		return
-	}
-
 	return
 }
 
@@ -145,9 +141,12 @@ func (httpCacheCtxt *HttpCacheCtxt) prepareSkipCacheMap() (err error) {
 	return
 }
 
-func (httpCacheCtxt *HttpCacheCtxt) prepareLocalCacheBuildMap() (err error) {
+func (httpCacheCtxt *HttpCacheCtxt) RegisterLocalCacheHandler(api string,
+	handler func(http.ResponseWriter,
+		*http.Request) ([]byte, error)) (err error) {
 
-	//httpCacheCtxt.LocalCacheBuildMap["/api/v2/login/"] = httpCacheCtxt.loginHandler
+	httpCacheCtxt.LocalCacheBuildMap[api] = handler
+
 	return
 }
 

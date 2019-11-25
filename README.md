@@ -12,6 +12,18 @@ by performing any of the following activities.
 - Local Handler which skips both
 the cache and the BE
 
+## Registering Local Handlers
+
+```go
+func someHandler(w http.ResponseWriter,
+	req *http.Request) (respBody []byte, err error) {
+
+	respBody = []byte("{\"something\": \"some-response\"}")
+
+	return
+}
+```
+
 ## Statistics
 
 ### Run Stats CLI
