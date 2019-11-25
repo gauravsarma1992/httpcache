@@ -46,11 +46,12 @@ NOTE - All time related statistics should be in
 
 ## Commands
 
-- turn-on-diag to turn on the Diagnose module
-- turn-off-diag to turn off the Diagnose module
-- dump-stats to dump the statistics in /tmp/stats.json
-- show-summary to show number of cloudports and number of APIs in cache,
-number of cache invalidations, login requests
-- show-proxy-stats to show the proxy request stats
-- show-cache-stats to show the caching stats
-- show-backend-stats to show the backend stats
+- `help` to display the list of commands
+- `turn-on-diag` to turn on the Diagnose module
+- `turn-off-diag` to turn off the Diagnose module
+- `dump-stats` to dump the statistics in /tmp/stats.json
+- `show-summary` to show number of cloudports and number of APIs in cache,
+nu`mber of cache invalidations, login requests
+- `show-proxy-stats` to show the proxy request stats
+- `show-cache-stats` to show the caching stats
+- `show-backend-stats` to show the backend stats
