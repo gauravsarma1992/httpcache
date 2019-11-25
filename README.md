@@ -14,6 +14,12 @@ the cache and the BE
 
 ## Statistics
 
+### Run Stats CLI
+
+```
+nc -U /var/run/httpcache/sockets/diag.sock
+```
+
 ### System Level
 
 - No of requests per second
