@@ -55,6 +55,7 @@ type (
 
 		SkipCacheMap       map[string]bool
 		LocalCacheBuildMap map[string]FuncHandler
+		Middlewares        []func(http.Handler) http.Handler
 
 		SysStats   *SysStats
 		CpStats    *sync.Map
@@ -146,6 +147,13 @@ func (httpCacheCtxt *HttpCacheCtxt) RegisterLocalCacheHandler(api string,
 		*http.Request) ([]byte, error)) (err error) {
 
 	httpCacheCtxt.LocalCacheBuildMap[api] = handler
+
+	return
+}
+
+func (httpCacheCtxt *HttpCacheCtxt) RegisterMiddleware(middleware func(http.Handler) http.Handler) (err error) {
+
+	httpCacheCtxt.Middlewares = append(httpCacheCtxt.Middlewares, middleware)
 
 	return
 }
@@ -340,6 +348,10 @@ func (httpCacheCtxt *HttpCacheCtxt) startListening() (err error) {
 	router.PathPrefix("/").HandlerFunc(httpCacheCtxt.rootHandler)
 
 	router.Use(httpCacheCtxt.loggingMiddleware)
+
+	for _, middleware := range httpCacheCtxt.Middlewares {
+		router.Use(middleware)
+	}
 
 	server = &http.Server{
 		Handler:      router,

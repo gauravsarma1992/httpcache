@@ -35,6 +35,31 @@ func someHandler(w http.ResponseWriter,
 }
 ```
 
+## Registering Middlewares
+
+To register a middleware
+```go
+if err = httpCacheCtxt.RegisterMiddleware(someMiddleware); err != nil {
+
+		log.Println(err)
+		os.Exit(-1)
+}
+```
+
+A sample middleware
+```go
+func someMiddleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+        log.Println(r.URL.Path)
+        next.ServeHTTP(w, r)
+
+    })
+}
+```
+
+Note - The middleware has to be set before the Process() function is called
+
 ## Statistics
 
 ### Run Stats CLI

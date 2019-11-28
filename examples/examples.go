@@ -15,6 +15,15 @@ func someHandler(w http.ResponseWriter,
 	return
 }
 
+func someMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		log.Println(r.URL.Path)
+		next.ServeHTTP(w, r)
+
+	})
+}
+
 func main() {
 
 	var (
@@ -31,6 +40,12 @@ func main() {
 
 	if err = httpCacheCtxt.RegisterLocalCacheHandler("/something",
 		someHandler); err != nil {
+
+		log.Println(err)
+		os.Exit(-1)
+	}
+
+	if err = httpCacheCtxt.RegisterMiddleware(someMiddleware); err != nil {
 
 		log.Println(err)
 		os.Exit(-1)
