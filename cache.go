@@ -11,30 +11,10 @@ type (
 	Cache struct {
 		httpCacheCtxt *HttpCacheCtxt
 
-		//CacheObj map[ReqKeyT]*CacheObj
-		CacheObj sync.Map
-	}
+		CacheObj map[ReqKeyT]*CacheObj
+		objLock  *sync.RWMutex
 
-	CacheObj struct {
-		IsValid bool
-
-		// CachedAt is used to determine
-		// when the cache invalidation request
-		// was received in the service.
-		// UpdatedAt is used to determine
-		// the time when the response received
-		// from the backend is formed and stored
-		// in the cache
-		CachedAt int64
-
-		CacheApi map[string]*CacheApi
-	}
-
-	CacheApi struct {
-		Base *CacheObj
-
-		UpdatedAt int64
-		Data      []byte
+		//CacheObj sync.Map
 	}
 )
 
@@ -42,6 +22,26 @@ func NewCache(httpCacheCtxt *HttpCacheCtxt) (cache *Cache, err error) {
 
 	cache = &Cache{
 		httpCacheCtxt: httpCacheCtxt,
+
+		CacheObj: make(map[ReqKeyT]*CacheObj, 1024),
+		objLock:  &sync.RWMutex{},
+	}
+
+	return
+}
+
+func (cache *Cache) getCacheObj(reqKey ReqKeyT) (cacheObj *CacheObj, err error) {
+
+	var (
+		isPresent bool
+	)
+
+	cache.objLock.RLock()
+	defer cache.objLock.RUnlock()
+
+	if cacheObj, isPresent = cache.CacheObj[reqKey]; !isPresent {
+		err = errors.New("No CloudPort Found for key " + string(reqKey))
+		return
 	}
 
 	return
@@ -66,17 +66,15 @@ func (cache *Cache) GetData(reqKey ReqKeyT, apiName string) (respBody []byte, er
 func (cache *Cache) get(reqKey ReqKeyT, apiName string) (cacheApi *CacheApi, err error) {
 
 	var (
-		isPresent bool
-		cacheObj  *CacheObj
-		cacheIntf interface{}
+		cacheObj *CacheObj
 	)
 
-	cacheIntf, _ = cache.CacheObj.LoadOrStore(reqKey, &CacheObj{})
+	if cacheObj, err = cache.getCacheObj(reqKey); err != nil {
+		err = errors.New("No CloudPort Found for key " + string(reqKey))
+		return
+	}
 
-	cacheObj = cacheIntf.(*CacheObj)
-
-	if cacheApi, isPresent = cacheObj.CacheApi[apiName]; !isPresent {
-		err = errors.New("No Cache Found for key " + string(reqKey))
+	if cacheApi, err = cacheObj.GetCacheApi(apiName); err != nil {
 		return
 	}
 
@@ -86,33 +84,26 @@ func (cache *Cache) get(reqKey ReqKeyT, apiName string) (cacheApi *CacheApi, err
 func (cache *Cache) Add(reqKey ReqKeyT, apiName string, respBody []byte) (err error) {
 
 	var (
-		swLock *sync.RWMutex
-
-		cacheObj  *CacheObj
-		cacheApi  *CacheApi
-		cacheIntf interface{}
+		cacheObj *CacheObj
+		cacheApi *CacheApi
 
 		currTime int64
 	)
 
 	currTime = time.Now().Unix()
 
-	swLock = &sync.RWMutex{}
-	swLock.Lock()
-	defer swLock.Unlock()
+	if cacheObj, err = cache.getCacheObj(reqKey); err != nil {
 
-	cacheIntf, _ = cache.CacheObj.LoadOrStore(reqKey, &CacheObj{})
-	cacheObj = cacheIntf.(*CacheObj)
+		// Initialize the cache object per request element
+		cacheObj, _ = NewCacheObj()
 
-	if cacheObj.CacheApi == nil {
-		cacheObj.CacheApi = make(map[string]*CacheApi)
+		cache.objLock.Lock()
+		cache.CacheObj[reqKey] = cacheObj
+		cache.objLock.Unlock()
 	}
 
-	if cacheApi, err = cache.get(reqKey, apiName); err != nil {
-		cacheApi = &CacheApi{
-			Base: cacheObj,
-		}
-		cacheObj.CacheApi[apiName] = cacheApi
+	if cacheApi, err = cacheObj.GetOrCreateCacheApi(apiName); err != nil {
+		return
 	}
 
 	cacheObj.CachedAt = currTime
@@ -126,24 +117,14 @@ func (cache *Cache) Add(reqKey ReqKeyT, apiName string, respBody []byte) (err er
 func (cache *Cache) Invalidate(reqKey ReqKeyT) (err error) {
 
 	var (
-		swLock    *sync.RWMutex
-		cacheObj  *CacheObj
-		cacheIntf interface{}
-
-		isPresent bool
+		cacheObj *CacheObj
 	)
 
 	log.Println("Invalidating cache for", reqKey)
 
-	if cacheIntf, isPresent = cache.CacheObj.Load(reqKey); !isPresent {
+	if cacheObj, err = cache.getCacheObj(reqKey); err != nil {
 		return
 	}
-
-	cacheObj = cacheIntf.(*CacheObj)
-
-	swLock = &sync.RWMutex{}
-	swLock.Lock()
-	defer swLock.Unlock()
 
 	cacheObj.CachedAt = time.Now().Unix()
 
@@ -153,19 +134,21 @@ func (cache *Cache) Invalidate(reqKey ReqKeyT) (err error) {
 func (cache *Cache) IsValid(reqKey ReqKeyT, apiName string) (isValid bool) {
 
 	var (
+		cacheObj *CacheObj
 		cacheApi *CacheApi
 		err      error
 	)
 
-	if cacheApi, err = cache.get(reqKey, apiName); err != nil {
+	if cacheObj, err = cache.getCacheObj(reqKey); err != nil {
+		return
+	}
+
+	if cacheApi, err = cacheObj.GetCacheApi(apiName); err != nil {
 		isValid = false
 		return
 	}
 
-	if cacheApi.Base.CachedAt == cacheApi.UpdatedAt {
-		isValid = true
-		return
-	}
+	isValid = cacheApi.IsValid()
 
 	return
 }
