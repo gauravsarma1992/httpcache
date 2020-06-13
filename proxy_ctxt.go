@@ -40,8 +40,8 @@ func NewProxyCtxt(httpCacheCtxt *HttpCacheCtxt) (proxyCtxt *ProxyCtxt, err error
 
 	proxyCtxt = &ProxyCtxt{
 
-		httpCacheCtxt:    httpCacheCtxt,
-		NoOfWorkers: runtime.NumCPU() * DefaultNofWorkers,
+		httpCacheCtxt: httpCacheCtxt,
+		NoOfWorkers:   runtime.NumCPU() * DefaultNofWorkers,
 
 		quitCh: make(chan bool),
 	}
@@ -100,8 +100,7 @@ func (proxyCtxt *ProxyCtxt) Send(req *http.Request) (resp *http.Response, err er
 		workerIdx int
 		worker    *ProxyWorker
 
-		reqKey   ReqKeyT
-		apiName string
+		reqKey ReqKeyT
 	)
 
 	reqKey = ReqKeyT(req.FormValue("uuid"))
@@ -110,10 +109,6 @@ func (proxyCtxt *ProxyCtxt) Send(req *http.Request) (resp *http.Response, err er
 		err = errors.New("No CP found in the request body")
 		return
 	}
-
-	apiName = req.URL.Path
-
-	proxyCtxt.httpCacheCtxt.regCpApiStats(reqKey, apiName, ProxyRequestRecvdStatKey)
 
 	workerIdx = proxyCtxt.getNextWorkerIdx()
 
@@ -130,10 +125,8 @@ func (proxyCtxt *ProxyCtxt) Send(req *http.Request) (resp *http.Response, err er
 	}
 
 	worker.InpCh <- req
-	proxyCtxt.httpCacheCtxt.regCpApiStats(reqKey, apiName, ProxyRequestSentStatKey)
 
 	resp = <-worker.OutCh
-	proxyCtxt.httpCacheCtxt.regCpApiStats(reqKey, apiName, ProxyResponseRecvdStatKey)
 
 	return
 }

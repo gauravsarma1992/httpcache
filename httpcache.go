@@ -9,8 +9,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"runtime"
-	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -56,11 +54,6 @@ type (
 		SkipCacheMap       map[string]bool
 		LocalCacheBuildMap map[string]FuncHandler
 		Middlewares        []func(http.Handler) http.Handler
-
-		SysStats   *SysStats
-		CpStats    *sync.Map
-		CpApiStats *sync.Map
-		ProxyStats *sync.Map
 	}
 )
 
@@ -94,12 +87,6 @@ func NewHttpCacheConfig() (cfg *Config, err error) {
 func NewHttpCacheCtxt() (httpCacheCtxt *HttpCacheCtxt, err error) {
 
 	httpCacheCtxt = &HttpCacheCtxt{
-
-		SysStats: &SysStats{},
-
-		CpStats:    &sync.Map{},
-		CpApiStats: &sync.Map{},
-		ProxyStats: &sync.Map{},
 
 		SkipCacheMap:       make(map[string]bool),
 		LocalCacheBuildMap: make(map[string]FuncHandler),
@@ -171,8 +158,6 @@ func (httpCacheCtxt *HttpCacheCtxt) processRequest(w http.ResponseWriter,
 		apiName string
 	)
 
-	httpCacheCtxt.regSysStats(RpsStatKey)
-
 	reqKey = ReqKeyT(req.FormValue("uuid"))
 
 	if reqKey == "" {
@@ -190,16 +175,11 @@ func (httpCacheCtxt *HttpCacheCtxt) processRequest(w http.ResponseWriter,
 
 		isCacheValid = httpCacheCtxt.Cache.IsValid(reqKey, apiName)
 
-		if !isCacheValid {
-			httpCacheCtxt.regCpApiStats(reqKey, apiName, CacheMissStatKey)
-		}
-
 	} else {
 		isCacheValid = false
 	}
 
 	if isCacheValid {
-		httpCacheCtxt.regCpApiStats(reqKey, apiName, CacheHitStatKey)
 		respBody, err = httpCacheCtxt.Cache.GetData(reqKey, apiName)
 		return
 	}
@@ -207,7 +187,6 @@ func (httpCacheCtxt *HttpCacheCtxt) processRequest(w http.ResponseWriter,
 	// Check if the cache is to built by the local process
 	// instead of proxying
 	if handler, isPresent = httpCacheCtxt.LocalCacheBuildMap[apiName]; isPresent {
-		httpCacheCtxt.regCpApiStats(reqKey, apiName, LocalCacheStatKey)
 		if respBody, err = handler(w, req); err == nil {
 			return
 		}
@@ -219,14 +198,12 @@ func (httpCacheCtxt *HttpCacheCtxt) processRequest(w http.ResponseWriter,
 			resp.Body.Close()
 		}
 
-		httpCacheCtxt.regCpApiStats(reqKey, apiName, BackendFailStatKey)
 		return
 	}
 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		httpCacheCtxt.regCpApiStats(reqKey, apiName, BackendFailStatKey)
 		return
 	}
 
@@ -257,8 +234,6 @@ func (httpCacheCtxt *HttpCacheCtxt) invalidateCacheHandler(w http.ResponseWriter
 	)
 
 	reqKey = ReqKeyT(req.FormValue("uuid"))
-
-	httpCacheCtxt.regCpStats(reqKey, CacheInvalidationsStatKey)
 
 	if err = httpCacheCtxt.Cache.Invalidate(reqKey); err != nil {
 
@@ -299,37 +274,6 @@ func (httpCacheCtxt *HttpCacheCtxt) rootHandler(w http.ResponseWriter, req *http
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(respBody)
-
-	return
-}
-
-func (httpCacheCtxt *HttpCacheCtxt) getActiveItems() (reqKeys []ReqKeyT, err error) {
-
-	httpCacheCtxt.CpApiStats.Range(func(key interface{}, _ interface{}) bool {
-		reqKeys = append(reqKeys, key.(ReqKeyT))
-		return true
-	})
-
-	return
-}
-
-func (httpCacheCtxt *HttpCacheCtxt) getApisOfItem(reqKey ReqKeyT) (apis []string, err error) {
-
-	httpCacheCtxt.CpApiStats.Range(func(key interface{}, val interface{}) bool {
-
-		if key.(ReqKeyT) != reqKey && reqKey != "*" {
-			return true
-		}
-
-		apiMap := val.(*sync.Map)
-
-		apiMap.Range(func(k2 interface{}, _ interface{}) bool {
-			apis = append(apis, k2.(string))
-			return true
-		})
-
-		return true
-	})
 
 	return
 }
@@ -383,37 +327,10 @@ func (httpCacheCtxt *HttpCacheCtxt) startListening() (err error) {
 	return
 }
 
-func (httpCacheCtxt *HttpCacheCtxt) monitor() (err error) {
-
-	for {
-
-		time.Sleep(time.Second * 10)
-
-		if httpCacheCtxt.Config.Server.Diagnose {
-
-			var (
-				totalItems int
-			)
-
-			httpCacheCtxt.CpApiStats.Range(func(_, _ interface{}) bool {
-				totalItems++
-
-				return true
-			})
-
-			log.Printf("Items - %d | Goroutines - %d | RPS - %d ",
-				totalItems, runtime.NumGoroutine(), httpCacheCtxt.SysStats.Rps)
-		}
-
-	}
-}
-
 func (httpCacheCtxt *HttpCacheCtxt) Process() (err error) {
 
 	go httpCacheCtxt.CommandCtxt.Process()
 	go httpCacheCtxt.ProxyCtxt.Process()
-
-	go httpCacheCtxt.monitor()
 
 	httpCacheCtxt.startListening()
 
