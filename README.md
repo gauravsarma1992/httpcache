@@ -3,9 +3,32 @@
 ## Description
 
 HttpCache Proxy is a proxy service sitting in front of
-the HttpCache server backend (BE). It receives the requests
-from any reverse proxy server(NGINX) and provides the response
-by performing any of the following activities.
+any server backend (BE).
+
+The HttpCache Proxy can sit in front of the backend
+server application. The proxy is mainly helpful if
+we want to cache in the responses of any previous requests.
+
+The proxy will maintain a cache of the responses per key
+so that if the same key comes, the proxy can respond instead
+of the backend server computing the entire thing again.
+
+The proxy also exposes invalidation APIs which can be used
+to invalidate the cache.
+
+If the proxy doesn't have any cache mapping or if the cache is
+invalidated, the proxy will itself send the request to the
+backend, store the response in the cache and respond to the
+request from its cache.
+
+In case there are APIs for which we want to skip the cache
+lookup, we can configure it in the same manner.
+
+A commmon scenario will be to place the HttpCache proxy
+in between the reverse proxy server (NGINX) and the actual
+backend server application.
+
+Following actions are supported:
 
 - Respond from in-memory cache
 - Skip cache and response from BE
@@ -14,7 +37,7 @@ the cache and the BE
 
 ## Registering Local Handlers
 
-To register a handler with the request processing 
+To register a handler with the request processing
 ```go
 if err = httpCacheCtxt.RegisterLocalCacheHandler("/something",
   someHandler); err != nil {
