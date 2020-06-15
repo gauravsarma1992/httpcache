@@ -20,6 +20,12 @@ const (
 
 	HttpServerType = "http"
 	UnixServerType = "unix"
+
+	DefaultServerHost = "127.0.0.1"
+	DefaultServerPort = "8098"
+
+	DefaultMonitorHost = "0.0.0.0"
+	DefaultMonitorPort = "9091"
 )
 
 type (
@@ -29,13 +35,17 @@ type (
 
 	Config struct {
 		Server struct {
-			Diagnose   bool   `json:"diagnose"`
 			ServerType string `json:"server_type"`
 			LocalHost  string `json:"local_host"`
 			RemoteHost string `json:"remote_host"`
-			DiagHost   string `json:"diag_host"`
 			Port       string `json:"port"`
 		} `json:"server"`
+
+		Monitor struct {
+			Host               string `json:"host"`
+			Port               string `json:"port"`
+			ShouldCollectStats bool   `json:"should_collect_stats"`
+		} `json:"monitor"`
 
 		Proxy struct {
 			NoOfWorkers int `json:"no_of_workers"`
@@ -45,11 +55,15 @@ type (
 	}
 
 	HttpCacheCtxt struct {
-		Cache       *Cache
-		ProxyCtxt   *ProxyCtxt
-		CommandCtxt *CommandCtxt
+		Cache     *Cache
+		ProxyCtxt *ProxyCtxt
+
+		Stats *Stats
 
 		Config *Config
+
+		Server           *http.Server
+		MonitoringServer *http.Server
 
 		SkipCacheMap       map[string]bool
 		LocalCacheBuildMap map[string]FuncHandler
@@ -81,6 +95,20 @@ func NewHttpCacheConfig() (cfg *Config, err error) {
 		return
 	}
 
+	if cfg.Monitor.Host == "" {
+		cfg.Monitor.Host = DefaultMonitorHost
+	}
+
+	if cfg.Monitor.Port == "" {
+		cfg.Monitor.Port = DefaultMonitorPort
+	}
+
+	if cfg.Server.Port == "" {
+		cfg.Server.Port = DefaultServerPort
+	}
+
+	log.Println(cfg)
+
 	return
 
 }
@@ -100,11 +128,19 @@ func NewHttpCacheCtxt() (httpCacheCtxt *HttpCacheCtxt, err error) {
 		return
 	}
 
-	if httpCacheCtxt.CommandCtxt, err = NewCommandCtxt(httpCacheCtxt); err != nil {
+	if httpCacheCtxt.Stats, err = NewStats(); err != nil {
+		return
+	}
+
+	if httpCacheCtxt.MonitoringServer, err = NewMonitorServer(); err != nil {
 		return
 	}
 
 	if httpCacheCtxt.Cache, err = NewCache(httpCacheCtxt); err != nil {
+		return
+	}
+
+	if httpCacheCtxt.Server, err = httpCacheCtxt.registerRoutes(); err != nil {
 		return
 	}
 
@@ -176,10 +212,12 @@ func (httpCacheCtxt *HttpCacheCtxt) processRequest(w http.ResponseWriter,
 		isCacheValid = httpCacheCtxt.Cache.IsValid(reqKey, apiName)
 
 	} else {
+		httpCacheCtxt.Stats.Counter.Skipped.Inc()
 		isCacheValid = false
 	}
 
 	if isCacheValid {
+		httpCacheCtxt.Stats.Counter.CachedResponse.Inc()
 		respBody, err = httpCacheCtxt.Cache.GetData(reqKey, apiName)
 		return
 	}
@@ -187,12 +225,14 @@ func (httpCacheCtxt *HttpCacheCtxt) processRequest(w http.ResponseWriter,
 	// Check if the cache is to built by the local process
 	// instead of proxying
 	if handler, isPresent = httpCacheCtxt.LocalCacheBuildMap[apiName]; isPresent {
+		httpCacheCtxt.Stats.Counter.LocalHandled.Inc()
 		if respBody, err = handler(w, req); err == nil {
 			return
 		}
 		return
 	}
 
+	httpCacheCtxt.Stats.Counter.Proxied.Inc()
 	if resp, err = httpCacheCtxt.ProxyCtxt.Send(req); err != nil {
 		if resp != nil {
 			resp.Body.Close()
@@ -221,6 +261,7 @@ func (httpCacheCtxt *HttpCacheCtxt) processRequest(w http.ResponseWriter,
 	// locally. In case it is required to be handled
 	// locally as well, custom logic has to be
 	// written for it
+	httpCacheCtxt.Stats.Counter.CacheAdded.Inc()
 	httpCacheCtxt.Cache.Add(reqKey, apiName, respBody)
 
 	return
@@ -234,6 +275,8 @@ func (httpCacheCtxt *HttpCacheCtxt) invalidateCacheHandler(w http.ResponseWriter
 	)
 
 	reqKey = ReqKeyT(req.FormValue("uuid"))
+
+	httpCacheCtxt.Stats.Counter.Invalidations.Inc()
 
 	if err = httpCacheCtxt.Cache.Invalidate(reqKey); err != nil {
 
@@ -255,6 +298,8 @@ func (httpCacheCtxt *HttpCacheCtxt) rootHandler(w http.ResponseWriter, req *http
 		respBody []byte
 		err      error
 	)
+
+	httpCacheCtxt.Stats.Counter.Requests.Inc()
 
 	if respBody, err = httpCacheCtxt.processRequest(w, req); err != nil {
 
@@ -278,12 +323,10 @@ func (httpCacheCtxt *HttpCacheCtxt) rootHandler(w http.ResponseWriter, req *http
 	return
 }
 
-func (httpCacheCtxt *HttpCacheCtxt) startListening() (err error) {
+func (httpCacheCtxt *HttpCacheCtxt) registerRoutes() (server *http.Server, err error) {
 
 	var (
-		router       *mux.Router
-		server       *http.Server
-		sockListener net.Listener
+		router *mux.Router
 	)
 
 	router = mux.NewRouter()
@@ -303,34 +346,63 @@ func (httpCacheCtxt *HttpCacheCtxt) startListening() (err error) {
 		ReadTimeout:  15 * time.Second,
 	}
 
+	return
+}
+
+func (httpCacheCtxt *HttpCacheCtxt) startMonitoringServer() (err error) {
+
+	var (
+		sockListener net.Listener
+	)
+
+	if sockListener, err = net.Listen("tcp4",
+		fmt.Sprintf("%s:%s",
+			httpCacheCtxt.Config.Monitor.Host,
+			httpCacheCtxt.Config.Monitor.Port)); err != nil {
+
+		panic(err)
+	}
+
+	log.Fatal(httpCacheCtxt.MonitoringServer.Serve(sockListener))
+
+	return
+}
+
+func (httpCacheCtxt *HttpCacheCtxt) startListening() (err error) {
+
+	var (
+		sockListener net.Listener
+	)
+
 	if httpCacheCtxt.Config.Server.ServerType == UnixServerType {
 
 		os.Remove(httpCacheCtxt.Config.Server.LocalHost)
 
-		sockListener, err := net.Listen("unix",
+		sockListener, err = net.Listen("unix",
 			httpCacheCtxt.Config.Server.LocalHost)
-
-		if err != nil {
-			panic(err)
-		}
-
-		log.Fatal(server.Serve(sockListener))
 
 	} else {
 
-		sockListener, err = net.Listen("tcp4", ":8098")
-
-		log.Fatal(server.Serve(sockListener))
+		sockListener, err = net.Listen("tcp4",
+			fmt.Sprintf("%s:%s",
+				httpCacheCtxt.Config.Server.LocalHost,
+				httpCacheCtxt.Config.Server.Port))
 
 	}
+
+	if err != nil {
+		panic(err)
+	}
+
+	log.Fatal(httpCacheCtxt.Server.Serve(sockListener))
 
 	return
 }
 
 func (httpCacheCtxt *HttpCacheCtxt) Process() (err error) {
 
-	go httpCacheCtxt.CommandCtxt.Process()
 	go httpCacheCtxt.ProxyCtxt.Process()
+	go httpCacheCtxt.startMonitoringServer()
 
 	httpCacheCtxt.startListening()
 
