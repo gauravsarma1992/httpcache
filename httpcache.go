@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -26,6 +27,8 @@ const (
 
 	DefaultMonitorHost = "0.0.0.0"
 	DefaultMonitorPort = "9091"
+
+	DefaultLogFile = "/tmp/httpcache.log"
 )
 
 type (
@@ -51,6 +54,10 @@ type (
 			NoOfWorkers int `json:"no_of_workers"`
 		} `json:"proxy"`
 
+		Logger struct {
+			LogFile string `json:"log_file"`
+		} `json:"logger"`
+
 		SkipCacheApis []string `json:"skip_cache_apis"`
 	}
 
@@ -61,6 +68,8 @@ type (
 		Stats *Stats
 
 		Config *Config
+
+		logger *logrus.Logger
 
 		Server           *http.Server
 		MonitoringServer *http.Server
@@ -107,6 +116,10 @@ func NewHttpCacheConfig() (cfg *Config, err error) {
 		cfg.Server.Port = DefaultServerPort
 	}
 
+	if cfg.Logger.LogFile == "" {
+		cfg.Logger.LogFile = DefaultLogFile
+	}
+
 	log.Println(cfg)
 
 	return
@@ -121,6 +134,10 @@ func NewHttpCacheCtxt() (httpCacheCtxt *HttpCacheCtxt, err error) {
 	}
 
 	if httpCacheCtxt.Config, err = NewHttpCacheConfig(); err != nil {
+		return
+	}
+
+	if httpCacheCtxt.logger, err = NewLogger(httpCacheCtxt); err != nil {
 		return
 	}
 
@@ -147,6 +164,25 @@ func NewHttpCacheCtxt() (httpCacheCtxt *HttpCacheCtxt, err error) {
 	if err = httpCacheCtxt.prepareSkipCacheMap(); err != nil {
 		return
 	}
+
+	return
+}
+
+func NewLogger(httpCacheCtxt *HttpCacheCtxt) (logger *logrus.Logger, err error) {
+
+	var (
+		logFile *os.File
+	)
+
+	if logFile, err = os.OpenFile(httpCacheCtxt.Config.Logger.LogFile,
+		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666); err != nil {
+
+		return
+	}
+
+	logger = logrus.New()
+
+	logger.SetOutput(logFile)
 
 	return
 }
@@ -203,6 +239,12 @@ func (httpCacheCtxt *HttpCacheCtxt) processRequest(w http.ResponseWriter,
 
 	apiName = req.URL.Path
 
+	httpCacheCtxt.logger.WithFields(logrus.Fields{
+		"req_key":    reqKey,
+		"api_name":   apiName,
+		"event_type": "cache_requests",
+	}).Info("Cache Request received")
+
 	// Check if the request is part of the SkipCacheMap
 	_, isPresent = httpCacheCtxt.SkipCacheMap[apiName]
 
@@ -212,11 +254,25 @@ func (httpCacheCtxt *HttpCacheCtxt) processRequest(w http.ResponseWriter,
 		isCacheValid = httpCacheCtxt.Cache.IsValid(reqKey, apiName)
 
 	} else {
+
+		httpCacheCtxt.logger.WithFields(logrus.Fields{
+			"req_key":    reqKey,
+			"api_name":   apiName,
+			"event_type": "cache_skipped",
+		}).Info("Cache Request Skipped")
+
 		httpCacheCtxt.Stats.Counter.Skipped.Inc()
 		isCacheValid = false
 	}
 
 	if isCacheValid {
+
+		httpCacheCtxt.logger.WithFields(logrus.Fields{
+			"req_key":    reqKey,
+			"api_name":   apiName,
+			"event_type": "cache_response",
+		}).Info("Cache Request Valid")
+
 		httpCacheCtxt.Stats.Counter.CachedResponse.Inc()
 		respBody, err = httpCacheCtxt.Cache.GetData(reqKey, apiName)
 		return
@@ -225,14 +281,29 @@ func (httpCacheCtxt *HttpCacheCtxt) processRequest(w http.ResponseWriter,
 	// Check if the cache is to built by the local process
 	// instead of proxying
 	if handler, isPresent = httpCacheCtxt.LocalCacheBuildMap[apiName]; isPresent {
+
+		httpCacheCtxt.logger.WithFields(logrus.Fields{
+			"req_key":    reqKey,
+			"api_name":   apiName,
+			"event_type": "cache_local_handled",
+		}).Info("Cache Request Local Handling")
+
 		httpCacheCtxt.Stats.Counter.LocalHandled.Inc()
+
 		if respBody, err = handler(w, req); err == nil {
 			return
 		}
 		return
 	}
 
+	httpCacheCtxt.logger.WithFields(logrus.Fields{
+		"req_key":    reqKey,
+		"api_name":   apiName,
+		"event_type": "cache_proxied",
+	}).Info("Cache Request Proxied")
+
 	httpCacheCtxt.Stats.Counter.Proxied.Inc()
+
 	if resp, err = httpCacheCtxt.ProxyCtxt.Send(req); err != nil {
 		if resp != nil {
 			resp.Body.Close()
@@ -261,7 +332,15 @@ func (httpCacheCtxt *HttpCacheCtxt) processRequest(w http.ResponseWriter,
 	// locally. In case it is required to be handled
 	// locally as well, custom logic has to be
 	// written for it
+
+	httpCacheCtxt.logger.WithFields(logrus.Fields{
+		"req_key":    reqKey,
+		"api_name":   apiName,
+		"event_type": "cache_added",
+	}).Info("Cache Response added")
+
 	httpCacheCtxt.Stats.Counter.CacheAdded.Inc()
+
 	httpCacheCtxt.Cache.Add(reqKey, apiName, respBody)
 
 	return
